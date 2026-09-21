@@ -2,7 +2,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <curl/curl.h>
-#include <ctype.h>
 #include "cJSON.h"
 #include "bot.h"
 
@@ -24,7 +23,6 @@ static size_t WriteMemoryCallback(void *contents, size_t size, size_t nmemb, voi
     return realsize;
 }
 
-// Replaces spaces with %20 for URL encoding
 void url_encode_space(const char *src, char *dest) {
     while (*src) {
         if (*src == ' ') { strcpy(dest, "%20"); dest += 3; }
@@ -38,18 +36,16 @@ int fetch_historical_data(const char* symbol, const char* interval, Candle* out_
     char cache_filename[128];
     char symbol_safe[16];
     
-    // Create a safe filename (replace '/' with '_')
     strcpy(symbol_safe, symbol);
     for(int i=0; symbol_safe[i]; i++) { if(symbol_safe[i] == '/') symbol_safe[i] = '_'; }
     snprintf(cache_filename, sizeof(cache_filename), "cache_%s_%s.csv", symbol_safe, interval);
 
-    // 1. Try Loading from Local Cache First
     FILE *cache_file = fopen(cache_filename, "r");
     if (cache_file) {
         printf("[INFO] Found local cache: %s. Loading data...\n", cache_filename);
         char line[256];
         int count = 0;
-        fgets(line, sizeof(line), cache_file); // Skip header
+        fgets(line, sizeof(line), cache_file); 
         while (fgets(line, sizeof(line), cache_file) && count < target_candles) {
             sscanf(line, "%[^,],%lf,%lf,%lf,%lf,%lf", 
                    out_buffer[count].timestamp, &out_buffer[count].open, 
@@ -62,7 +58,6 @@ int fetch_historical_data(const char* symbol, const char* interval, Candle* out_
         return count;
     }
 
-    // 2. Fetch from API with Pagination (Chunking)
     const char* api_key = getenv("TWELVEDATA_API_KEY");
     if (!api_key || strlen(api_key) == 0) api_key = "demo";
 
@@ -71,7 +66,7 @@ int fetch_historical_data(const char* symbol, const char* interval, Candle* out_
 
     int total_fetched = 0;
     char end_date[64] = "";
-    int req_size = 5000; // Max allowed per free tier request
+    int req_size = 5000; 
 
     printf("[INFO] No cache found. Fetching %d candles via API chunks...\n", target_candles);
 
@@ -107,7 +102,7 @@ int fetch_historical_data(const char* symbol, const char* interval, Candle* out_
         if (!values || !cJSON_IsArray(values)) {
             cJSON_Delete(json);
             free(chunk.memory);
-            break; // No more data or API error limit reached
+            break; 
         }
 
         cJSON *item;
@@ -126,7 +121,7 @@ int fetch_historical_data(const char* symbol, const char* interval, Candle* out_
             out_buffer[total_fetched].high = atof(cJSON_GetObjectItemCaseSensitive(item, "high")->valuestring);
             out_buffer[total_fetched].low = atof(cJSON_GetObjectItemCaseSensitive(item, "low")->valuestring);
             out_buffer[total_fetched].close = atof(cJSON_GetObjectItemCaseSensitive(item, "close")->valuestring);
-            out_buffer[total_fetched].volume = 0; // Optional volume parse
+            out_buffer[total_fetched].volume = 0; 
 
             total_fetched++;
             chunk_count++;
@@ -137,12 +132,11 @@ int fetch_historical_data(const char* symbol, const char* interval, Candle* out_
 
         if (chunk_count == 0) break; 
         
-        strcpy(end_date, last_timestamp); // Set next pagination anchor
+        strcpy(end_date, last_timestamp); 
         printf("[INFO] Fetched chunk: %d candles. Total: %d\n", chunk_count, total_fetched);
     }
     curl_easy_cleanup(curl);
 
-    // 3. Save to Local Cache
     if (total_fetched > 0) {
         cache_file = fopen(cache_filename, "w");
         if (cache_file) {
@@ -160,5 +154,16 @@ int fetch_historical_data(const char* symbol, const char* interval, Candle* out_
 }
 
 void parse_live_tick(const char* json_string, LiveTick* out_tick) {
-    // ... Unchanged ...
+    cJSON *json = cJSON_Parse(json_string);
+    if (!json) return;
+    cJSON *event = cJSON_GetObjectItemCaseSensitive(json, "event");
+    if (event && cJSON_IsString(event) && strcmp(event->valuestring, "price") == 0) {
+        cJSON *symbol = cJSON_GetObjectItemCaseSensitive(json, "symbol");
+        cJSON *bid = cJSON_GetObjectItemCaseSensitive(json, "bid");
+        cJSON *ask = cJSON_GetObjectItemCaseSensitive(json, "ask");
+        if (cJSON_IsString(symbol)) strncpy(out_tick->symbol, symbol->valuestring, 15);
+        if (cJSON_IsNumber(bid)) out_tick->bid = bid->valuedouble;
+        if (cJSON_IsNumber(ask)) out_tick->ask = ask->valuedouble;
+    }
+    cJSON_Delete(json);
 }

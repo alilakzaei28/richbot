@@ -36,16 +36,14 @@ typedef struct {
     double fixed_lot_size;   
 } Account;
 
-// Upgraded Strategy Parameters
+// Fakeout Strategy Parameters
 typedef struct {
     int lookback_period;       
     int atr_period;            
-    int max_pullback_candles;  // Changed to 6
     double risk_reward_ratio;  
-    int ema_period;            // 200 EMA Filter
-    int session_start_hour;    // 12 (12:00 PM GMT)
-    int session_end_hour;      // 17 (17:00 PM GMT)
-    double spread_slippage_pips; // Fixed cost deduction (e.g. 1.5)
+    int session_start_hour;    
+    int session_end_hour;      
+    double spread_slippage_pips; 
 } StrategyParams;
 
 typedef struct {
@@ -58,7 +56,7 @@ typedef struct {
 int fetch_historical_data(const char* symbol, const char* interval, Candle* out_buffer, int target_candles);
 void parse_live_tick(const char* json_string, LiveTick* out_tick);
 
-int strategy_breakout_pullback(Candle* prices, int current_idx, StrategyParams* params, StrategyState* state, double* out_sl);
+int strategy_fakeout_reversal(Candle* prices, int current_idx, StrategyParams* params, StrategyState* state, double* out_sl);
 double calculate_lot_size(Account* acc, double entry, double stop_loss);
 int execute_realistic_backtest_trade(Account* acc, Trade* trade, Candle* prices, int start_idx, StrategyParams* params);
 void export_report(Trade* trades, int count, const char* filename);

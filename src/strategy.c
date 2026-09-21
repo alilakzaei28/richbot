@@ -7,6 +7,7 @@
 // Calculate Simple Average True Range (ATR)
 double calculate_atr(Candle* prices, int current_idx, int period) {
     if (current_idx < period) return 0.0010; 
+    
     double sum_tr = 0.0;
     for (int i = current_idx - period + 1; i <= current_idx; i++) {
         double hl = prices[i].high - prices[i].low;
@@ -16,21 +17,10 @@ double calculate_atr(Candle* prices, int current_idx, int period) {
         double tr = hl;
         if (hc > tr) tr = hc;
         if (lc > tr) tr = lc;
+        
         sum_tr += tr;
     }
     return sum_tr / period;
-}
-
-// Calculate Exponential Moving Average (EMA)
-double calculate_ema(Candle* prices, int current_idx, int period) {
-    if (current_idx < period) return prices[current_idx].close;
-    double multiplier = 2.0 / (period + 1.0);
-    double ema = prices[current_idx - period].close; 
-    
-    for (int i = current_idx - period + 1; i <= current_idx; i++) {
-        ema = (prices[i].close - ema) * multiplier + ema;
-    }
-    return ema;
 }
 
 // Helper to extract hour from timestamp (YYYY-MM-DD HH:MM:SS)
@@ -40,10 +30,11 @@ int extract_hour(const char* timestamp) {
     return hour;
 }
 
-// Breakout and Pullback Strategy Engine
-int strategy_breakout_pullback(Candle* prices, int current_idx, StrategyParams* params, StrategyState* state, double* out_sl) {
-    if (current_idx < params->lookback_period + 1 || current_idx < params->ema_period) return 0;
+// Fakeout (Stop-Hunt Reversal) Engine
+int strategy_fakeout_reversal(Candle* prices, int current_idx, StrategyParams* params, StrategyState* state, double* out_sl) {
+    if (current_idx < params->lookback_period + 1) return 0;
 
+    // 1. Calculate 50-period Resistance (HH) and Support (LL) EXCLUDING current candle
     double hh = prices[current_idx - params->lookback_period].high;
     double ll = prices[current_idx - params->lookback_period].low;
     
@@ -52,70 +43,34 @@ int strategy_breakout_pullback(Candle* prices, int current_idx, StrategyParams* 
         if (prices[i].low < ll) ll = prices[i].low;
     }
 
-    double current_ema = calculate_ema(prices, current_idx, params->ema_period);
-
-    // 1. Process active breakouts (Tighter Window: 6 candles)
-    if (state->active_breakout != 0) {
-        state->candles_since_breakout++;
+    // 2. Session Filter (Early London through NY Overlap)
+    int current_hour = extract_hour(prices[current_idx].timestamp);
+    
+    if (current_hour >= params->session_start_hour && current_hour < params->session_end_hour) {
         
-        if (state->candles_since_breakout > params->max_pullback_candles) {
-            state->active_breakout = 0; // Exceeded tight window, cancel setup
-        } else {
-            // Check for Long Pullback Entry
-            if (state->active_breakout == 1) {
-                // Must remain above 200 EMA during pullback
-                if (prices[current_idx].close > current_ema && 
-                    prices[current_idx].low <= state->broken_level && 
-                    prices[current_idx].close > state->broken_level) {
-                    
-                    double atr = calculate_atr(prices, current_idx, params->atr_period);
-                    *out_sl = prices[current_idx].low - atr; 
-                    state->active_breakout = 0; 
-                    return 1;
-                }
-            } 
-            // Check for Short Pullback Entry
-            else if (state->active_breakout == -1) {
-                // Must remain below 200 EMA during pullback
-                if (prices[current_idx].close < current_ema && 
-                    prices[current_idx].high >= state->broken_level && 
-                    prices[current_idx].close < state->broken_level) {
-                    
-                    double atr = calculate_atr(prices, current_idx, params->atr_period);
-                    *out_sl = prices[current_idx].high + atr; 
-                    state->active_breakout = 0; 
-                    return -1;
-                }
-            }
+        // SHORT Entry (Top-Trap / Liquidity Grab)
+        // High poked above 50-period resistance, but closed below it.
+        if (prices[current_idx].high > hh && prices[current_idx].close < hh) {
+            double atr = calculate_atr(prices, current_idx, params->atr_period);
+            *out_sl = prices[current_idx].high + (1.5 * atr); 
+            state->active_breakout = 0; 
+            return -1; 
         }
-    }
-
-    // 2. Scan for NEW Breakouts (Session & Macro Trend Filters applied)
-    if (state->active_breakout == 0) {
-        int current_hour = extract_hour(prices[current_idx].timestamp);
         
-        // ONLY validate breakouts during London/NY Overlap
-        if (current_hour >= params->session_start_hour && current_hour < params->session_end_hour) {
-            
-            // LONG Breakout: Must break Resistance AND be Above 200 EMA
-            if (prices[current_idx].close > hh && prices[current_idx].close > current_ema) {
-                state->active_breakout = 1;
-                state->broken_level = hh;
-                state->candles_since_breakout = 0;
-            } 
-            // SHORT Breakout: Must break Support AND be Below 200 EMA
-            else if (prices[current_idx].close < ll && prices[current_idx].close < current_ema) {
-                state->active_breakout = -1;
-                state->broken_level = ll;
-                state->candles_since_breakout = 0;
-            }
+        // LONG Entry (Bottom-Trap / Liquidity Grab)
+        // Low poked below 50-period support, but closed above it.
+        if (prices[current_idx].low < ll && prices[current_idx].close > ll) {
+            double atr = calculate_atr(prices, current_idx, params->atr_period);
+            *out_sl = prices[current_idx].low - (1.5 * atr); 
+            state->active_breakout = 0;
+            return 1; 
         }
     }
 
     return 0; 
 }
 
-// Simulates the trade and subtracts Spread/Slippage costs
+// Simulates trade and deducts execution costs
 int execute_realistic_backtest_trade(Account* acc, Trade* trade, Candle* prices, int start_idx, StrategyParams* params) {
     int outcome = 0; 
     int close_idx = start_idx;
@@ -139,13 +94,13 @@ int execute_realistic_backtest_trade(Account* acc, Trade* trade, Candle* prices,
             
         double gross_pnl = pip_change * 10.0 * trade->lot_size;
         
-        // Apply Spread and Slippage Penalty (e.g., 1.5 pips cost per round-trip)
+        // Apply Spread and Slippage Penalty
         double spread_slippage_cost = params->spread_slippage_pips * 10.0 * trade->lot_size;
 
         if (outcome == 1) {
-            trade->realized_pnl = gross_pnl - spread_slippage_cost; // Profit is reduced
+            trade->realized_pnl = gross_pnl - spread_slippage_cost; 
         } else {
-            trade->realized_pnl = -(gross_pnl + spread_slippage_cost); // Loss is increased
+            trade->realized_pnl = -(gross_pnl + spread_slippage_cost); 
         }
         
         acc->current_balance += trade->realized_pnl;
