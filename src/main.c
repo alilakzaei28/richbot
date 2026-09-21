@@ -19,20 +19,21 @@ int main(int argc, char *argv[]) {
     }
 
     if (strcmp(argv[1], "--backtest") == 0) {
-        printf("[INFO] Initializing High-Probability Backtest Engine...\n");
+        printf("[INFO] Initializing High-Probability Daily Engine...\n");
 
-        Candle raw_history[2000]; // Increased buffer for deeper EMA lookbacks
+        Candle raw_history[1000]; 
         memset(raw_history, 0, sizeof(raw_history));
 
-        // Fetching max allowable free tier data
-        int count = fetch_historical_data("EUR/USD", "1h", raw_history, 2000);
+        // Fetch 500 daily candles. Twelve Data uses "1day" for the Daily timeframe.
+        // We need older data to prime the 200 EMA so the 1-year backtest starts accurately.
+        int count = fetch_historical_data("EUR/USD", "1day", raw_history, 500);
         if (count < 250) {
             printf("[ERROR] Insufficient data. Trend strategy needs at least 250 candles.\n");
             return 1;
         }
 
         reverse_candles(raw_history, count);
-        printf("[INFO] Chronologically aligned %d candles.\n", count);
+        printf("[INFO] Chronologically aligned %d daily candles.\n", count);
 
         // --- USER CONFIGURABLE CAPITAL & STRATEGY SETTINGS ---
         Account acc = {
@@ -40,23 +41,32 @@ int main(int argc, char *argv[]) {
             .current_balance = 10000.0,
             .max_risk_pct = 0.02,     
             .use_fixed_lot = 1,       
-            .fixed_lot_size = 0.50    // Sized up to half a lot
+            .fixed_lot_size = 0.50    // Half a standard lot
         };
 
         StrategyParams params = {
-            .trend_ema_period = 200,  // The institutional benchmark for trend direction
-            .rsi_period = 14,         // Standard RSI period
-            .rsi_oversold = 40.0,     // Look for shallow dips in uptrends
-            .rsi_overbought = 60.0,   // Look for shallow rallies in downtrends
-            .sl_pips = 30.0,          // 30 pip stop loss
-            .tp_pips = 45.0           // 45 pip take profit (1:1.5 R:R)
+            .trend_ema_period = 200,  // Institutional trend benchmark
+            .rsi_period = 14,         
+            .rsi_oversold = 40.0,     // Shallow dips
+            .rsi_overbought = 60.0,   // Shallow rallies
+            .sl_pips = 50.0,          // Widened for Daily timeframe volatility (ATR)
+            .tp_pips = 75.0           // 1:1.5 Risk-to-Reward Ratio
         };
         // -----------------------------------------------------
 
-        Trade trade_log[2000];
+        Trade trade_log[1000];
         int trade_count = 0;
 
-        for (int i = params.trend_ema_period; i < count - 1; i++) {
+        // 1 Year of Forex trading is roughly 252 days.
+        // We set our start index to exactly 252 candles from the end, ensuring a 1-year test.
+        int start_idx = count - 252;
+        if (start_idx < params.trend_ema_period) {
+            start_idx = params.trend_ema_period; // Safety fallback
+        }
+
+        printf("[INFO] Executing 1-Year Backtest from candle index %d to %d\n", start_idx, count - 1);
+
+        for (int i = start_idx; i < count - 1; i++) {
             int signal = strategy_trend_pullback(raw_history, i, &params);
             if (signal == 0) continue;
 
@@ -84,12 +94,14 @@ int main(int argc, char *argv[]) {
 
             if (t.realized_pnl != 0.0) {
                 trade_log[trade_count++] = t;
-                // Move the index forward to prevent the bot from opening 5 trades in a row during the same pullback
-                i += 5; 
+                
+                // Jump the index forward by 2 days after a closed trade 
+                // to prevent the bot from immediately re-entering the exact same pullback
+                i += 2; 
             }
         }
 
-        export_report(trade_log, trade_count, "reports/backtest_EMA_RSI.csv");
+        export_report(trade_log, trade_count, "reports/backtest_EMA_RSI_1D.csv");
 
         double total_pnl = acc.current_balance - acc.initial_balance;
         int wins = 0;
@@ -99,7 +111,7 @@ int main(int argc, char *argv[]) {
         double win_rate = (trade_count > 0) ? ((double)wins / trade_count) * 100.0 : 0.0;
 
         printf("\n==========================================\n");
-        printf("         BACKTEST PERFORMANCE SUMMARY     \n");
+        printf("         1-YEAR DAILY PERFORMANCE         \n");
         printf("==========================================\n");
         printf("Initial Balance : $%.2f\n", acc.initial_balance);
         printf("Final Balance   : $%.2f\n", acc.current_balance);
