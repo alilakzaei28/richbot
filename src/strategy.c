@@ -34,7 +34,7 @@ int extract_hour(const char* timestamp) {
 int strategy_fakeout_reversal(Candle* prices, int current_idx, StrategyParams* params, StrategyState* state, double* out_sl) {
     if (current_idx < params->lookback_period + 1) return 0;
 
-    // 1. Calculate 50-period Resistance (HH) and Support (LL) EXCLUDING current candle
+    // 1. Calculate Dynamic Resistance (HH) and Support (LL) EXCLUDING current candle
     double hh = prices[current_idx - params->lookback_period].high;
     double ll = prices[current_idx - params->lookback_period].low;
     
@@ -43,25 +43,29 @@ int strategy_fakeout_reversal(Candle* prices, int current_idx, StrategyParams* p
         if (prices[i].low < ll) ll = prices[i].low;
     }
 
-    // 2. Session Filter (Early London through NY Overlap)
+    // 2. Session Filter
     int current_hour = extract_hour(prices[current_idx].timestamp);
     
     if (current_hour >= params->session_start_hour && current_hour < params->session_end_hour) {
         
-        // SHORT Entry (Top-Trap / Liquidity Grab)
-        // High poked above 50-period resistance, but closed below it.
+        // SHORT Entry (Top-Trap)
         if (prices[current_idx].high > hh && prices[current_idx].close < hh) {
             double atr = calculate_atr(prices, current_idx, params->atr_period);
-            *out_sl = prices[current_idx].high + (1.5 * atr); 
+            
+            // CORRECTED: Uses the dynamic OpenMP grid parameter instead of a hardcoded 1.5
+            *out_sl = prices[current_idx].high + (params->atr_multiplier * atr); 
+            
             state->active_breakout = 0; 
             return -1; 
         }
         
-        // LONG Entry (Bottom-Trap / Liquidity Grab)
-        // Low poked below 50-period support, but closed above it.
+        // LONG Entry (Bottom-Trap)
         if (prices[current_idx].low < ll && prices[current_idx].close > ll) {
             double atr = calculate_atr(prices, current_idx, params->atr_period);
-            *out_sl = prices[current_idx].low - (1.5 * atr); 
+            
+            // CORRECTED: Uses the dynamic OpenMP grid parameter instead of a hardcoded 1.5
+            *out_sl = prices[current_idx].low - (params->atr_multiplier * atr); 
+            
             state->active_breakout = 0;
             return 1; 
         }
