@@ -31,10 +31,7 @@ int fetch_historical_data(const char* symbol, const char* interval, Candle* out_
     }
 
     CURL *curl = curl_easy_init();
-    if (!curl) {
-        printf("[ERROR] Failed to initialize curl.\n");
-        return 0;
-    }
+    if (!curl) return 0;
 
     struct MemoryStruct chunk;
     chunk.memory = malloc(1);
@@ -52,7 +49,6 @@ int fetch_historical_data(const char* symbol, const char* interval, Candle* out_
 
     CURLcode res = curl_easy_perform(curl);
     if (res != CURLE_OK) {
-        printf("[ERROR] curl_easy_perform() failed: %s\n", curl_easy_strerror(res));
         curl_easy_cleanup(curl);
         free(chunk.memory);
         return 0;
@@ -60,17 +56,6 @@ int fetch_historical_data(const char* symbol, const char* interval, Candle* out_
 
     cJSON *json = cJSON_Parse(chunk.memory);
     if (!json) {
-        printf("[ERROR] Failed to parse API JSON response.\n");
-        curl_easy_cleanup(curl);
-        free(chunk.memory);
-        return 0;
-    }
-
-    cJSON *status = cJSON_GetObjectItemCaseSensitive(json, "status");
-    if (status && cJSON_IsString(status) && strcmp(status->valuestring, "error") == 0) {
-        cJSON *message = cJSON_GetObjectItemCaseSensitive(json, "message");
-        printf("[API ERROR] %s\n", message ? message->valuestring : "Unknown error");
-        cJSON_Delete(json);
         curl_easy_cleanup(curl);
         free(chunk.memory);
         return 0;
@@ -89,7 +74,6 @@ int fetch_historical_data(const char* symbol, const char* interval, Candle* out_
             cJSON *high_val = cJSON_GetObjectItemCaseSensitive(item, "high");
             cJSON *low_val = cJSON_GetObjectItemCaseSensitive(item, "low");
             cJSON *close_val = cJSON_GetObjectItemCaseSensitive(item, "close");
-            cJSON *vol_val = cJSON_GetObjectItemCaseSensitive(item, "volume");
 
             if (cJSON_IsString(datetime)) {
                 strncpy(out_buffer[count].timestamp, datetime->valuestring, sizeof(out_buffer[count].timestamp) - 1);
@@ -98,7 +82,6 @@ int fetch_historical_data(const char* symbol, const char* interval, Candle* out_
             if (cJSON_IsString(high_val))  out_buffer[count].high = atof(high_val->valuestring);
             if (cJSON_IsString(low_val))   out_buffer[count].low = atof(low_val->valuestring);
             if (cJSON_IsString(close_val)) out_buffer[count].close = atof(close_val->valuestring);
-            if (cJSON_IsString(vol_val))   out_buffer[count].volume = atof(vol_val->valuestring);
 
             count++;
         }
@@ -108,26 +91,4 @@ int fetch_historical_data(const char* symbol, const char* interval, Candle* out_
     curl_easy_cleanup(curl);
     free(chunk.memory);
     return count;
-}
-
-void parse_live_tick(const char* json_string, LiveTick* out_tick) {
-    cJSON *json = cJSON_Parse(json_string);
-    if (!json) return;
-
-    cJSON *event = cJSON_GetObjectItemCaseSensitive(json, "event");
-    if (event && cJSON_IsString(event) && strcmp(event->valuestring, "price") == 0) {
-        cJSON *symbol = cJSON_GetObjectItemCaseSensitive(json, "symbol");
-        cJSON *bid = cJSON_GetObjectItemCaseSensitive(json, "bid");
-        cJSON *ask = cJSON_GetObjectItemCaseSensitive(json, "ask");
-
-        if (cJSON_IsString(symbol)) {
-            strncpy(out_tick->symbol, symbol->valuestring, sizeof(out_tick->symbol) - 1);
-        }
-        if (cJSON_IsNumber(bid)) out_tick->bid = bid->valuedouble;
-        if (cJSON_IsNumber(ask)) out_tick->ask = ask->valuedouble;
-
-        printf("[Live Tick] %s | Bid: %.5f | Ask: %.5f\n", 
-               out_tick->symbol, out_tick->bid, out_tick->ask);
-    }
-    cJSON_Delete(json);
 }

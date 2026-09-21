@@ -1,7 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <omp.h>
+#include <math.h>
 #include "bot.h"
 
 static void reverse_candles(Candle* arr, int count) {
@@ -19,89 +19,86 @@ int main(int argc, char *argv[]) {
     }
 
     if (strcmp(argv[1], "--backtest") == 0) {
-        printf("[INFO] Initializing High-Probability Daily Engine...\n");
+        printf("[INFO] Initializing 15-Minute Breakout & Pullback Engine...\n");
 
-        Candle raw_history[1000]; 
+        Candle raw_history[2500]; 
         memset(raw_history, 0, sizeof(raw_history));
 
-        // Fetch 500 daily candles. Twelve Data uses "1day" for the Daily timeframe.
-        // We need older data to prime the 200 EMA so the 1-year backtest starts accurately.
-        int count = fetch_historical_data("EUR/USD", "1day", raw_history, 500);
-        if (count < 250) {
-            printf("[ERROR] Insufficient data. Trend strategy needs at least 250 candles.\n");
+        // Request 15-minute data
+        int count = fetch_historical_data("EUR/USD", "15min", raw_history, 2500);
+        if (count < 100) {
+            printf("[ERROR] Insufficient data for 50-period strategy.\n");
             return 1;
         }
 
         reverse_candles(raw_history, count);
-        printf("[INFO] Chronologically aligned %d daily candles.\n", count);
+        printf("[INFO] Chronologically aligned %d candles (15m timeframe).\n", count);
 
-        // --- USER CONFIGURABLE CAPITAL & STRATEGY SETTINGS ---
+        // --- ACCOUNT & STRATEGY SPECIFICATIONS ---
         Account acc = {
-            .initial_balance = 100000.0,
-            .current_balance = 100000.0,
-            .max_risk_pct = 0.10,     
-            .use_fixed_lot = 2,       
-            .fixed_lot_size = 1    // Half a standard lot
+            .initial_balance = 10000.0,
+            .current_balance = 10000.0,
+            .max_risk_pct = 0.01,     // Exactly 1% risk per trade
+            .use_fixed_lot = 0,       // Disable fixed lot to enable dynamic position sizing
+            .fixed_lot_size = 0.0     
         };
 
         StrategyParams params = {
-            .trend_ema_period = 200,  // Institutional trend benchmark
-            .rsi_period = 14,         
-            .rsi_oversold = 40.0,     // Shallow dips
-            .rsi_overbought = 60.0,   // Shallow rallies
-            .sl_pips = 50.0,          // Widened for Daily timeframe volatility (ATR)
-            .tp_pips = 75.0           // 1:1.5 Risk-to-Reward Ratio
+            .lookback_period = 50,    
+            .atr_period = 14,         
+            .max_pullback_candles = 10, 
+            .risk_reward_ratio = 2.0  // Fixed 1:2 R:R
         };
-        // -----------------------------------------------------
+        
+        StrategyState state = {0, 0.0, 0};
+        // -----------------------------------------
 
         Trade trade_log[1000];
         int trade_count = 0;
 
-        // 1 Year of Forex trading is roughly 252 days.
-        // We set our start index to exactly 252 candles from the end, ensuring a 1-year test.
-        int start_idx = count - 252;
-        if (start_idx < params.trend_ema_period) {
-            start_idx = params.trend_ema_period; // Safety fallback
-        }
-
-        printf("[INFO] Executing 1-Year Backtest from candle index %d to %d\n", start_idx, count - 1);
-
-        for (int i = start_idx; i < count - 1; i++) {
-            int signal = strategy_trend_pullback(raw_history, i, &params);
+        for (int i = params.lookback_period; i < count - 1; i++) {
+            double calculated_sl = 0.0;
+            int signal = strategy_breakout_pullback(raw_history, i, &params, &state, &calculated_sl);
+            
             if (signal == 0) continue;
 
             Trade t;
             memset(&t, 0, sizeof(Trade));
             strncpy(t.symbol, "EUR/USD", sizeof(t.symbol) - 1);
+            strcpy(t.entry_time, raw_history[i].timestamp);
             t.type = signal;
             t.entry_price = raw_history[i].close;
+            t.stop_loss = calculated_sl;
 
-            double sl_dist = params.sl_pips / 10000.0;
-            double tp_dist = params.tp_pips / 10000.0;
-
-            if (signal == 1) { 
-                t.stop_loss = t.entry_price - sl_dist;
-                t.take_profit = t.entry_price + tp_dist;
-            } else { 
-                t.stop_loss = t.entry_price + sl_dist;
-                t.take_profit = t.entry_price - tp_dist;
+            // Mathematical 1:2 Risk to Reward Calculation
+            double risk_distance = fabs(t.entry_price - t.stop_loss);
+            if (signal == 1) {
+                t.take_profit = t.entry_price + (risk_distance * params.risk_reward_ratio);
+            } else {
+                t.take_profit = t.entry_price - (risk_distance * params.risk_reward_ratio);
             }
 
+            // Position Sizing: Exactly 1% of account equity
             t.lot_size = calculate_lot_size(&acc, t.entry_price, t.stop_loss);
-            if (t.lot_size <= 0.0) continue;
+            if (t.lot_size < 0.01) continue;
 
-            execute_realistic_backtest_trade(&acc, &t, raw_history, i);
+            // Simulates trade and returns the index where the trade hit SL or TP
+            int close_idx = execute_realistic_backtest_trade(&acc, &t, raw_history, i);
 
             if (t.realized_pnl != 0.0) {
                 trade_log[trade_count++] = t;
                 
-                // Jump the index forward by 2 days after a closed trade 
-                // to prevent the bot from immediately re-entering the exact same pullback
-                i += 2; 
+                // Pyramiding strict rule: 1 order at a time.
+                // Advance the loop directly to the candle where the trade closed.
+                i = close_idx; 
+                
+                // Clear any residual strategy state to start scanning fresh
+                state.active_breakout = 0; 
+                state.candles_since_breakout = 0;
             }
         }
 
-        export_report(trade_log, trade_count, "reports/backtest_EMA_RSI_1D.csv");
+        export_report(trade_log, trade_count, "reports/backtest_15m_Breakout.csv");
 
         double total_pnl = acc.current_balance - acc.initial_balance;
         int wins = 0;
@@ -111,7 +108,7 @@ int main(int argc, char *argv[]) {
         double win_rate = (trade_count > 0) ? ((double)wins / trade_count) * 100.0 : 0.0;
 
         printf("\n==========================================\n");
-        printf("         1-YEAR DAILY PERFORMANCE         \n");
+        printf("     15-MIN BREAKOUT & PULLBACK SUMMARY   \n");
         printf("==========================================\n");
         printf("Initial Balance : $%.2f\n", acc.initial_balance);
         printf("Final Balance   : $%.2f\n", acc.current_balance);
@@ -120,13 +117,6 @@ int main(int argc, char *argv[]) {
         printf("Win Rate        : %.2f%%\n", win_rate);
         printf("==========================================\n");
     } 
-    else if (strcmp(argv[1], "--live") == 0) {
-        printf("[INFO] Live forward engine initialized.\n");
-        const char *mock_tick = "{\"event\":\"price\",\"symbol\":\"EUR/USD\",\"bid\":1.08502,\"ask\":1.08514}";
-        LiveTick tick;
-        memset(&tick, 0, sizeof(LiveTick));
-        parse_live_tick(mock_tick, &tick);
-    }
 
     return 0;
 }
