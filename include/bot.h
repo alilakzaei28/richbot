@@ -29,14 +29,17 @@ typedef struct {
 typedef struct {
     double initial_balance;
     double current_balance;
-    double max_risk_pct;     // e.g., 0.02 for 2%
-    int use_fixed_lot;       // 1 = Fixed Lot, 0 = Dynamic Lot based on max_risk_pct
-    double fixed_lot_size;   // User-defined lot size (e.g., 0.1)
+    double max_risk_pct;     
+    int use_fixed_lot;       
+    double fixed_lot_size;   
 } Account;
 
+// Upgraded Strategy Parameters
 typedef struct {
-    int bb_period;
-    double bb_std_dev;
+    int trend_ema_period;  
+    int rsi_period;        
+    double rsi_oversold;   
+    double rsi_overbought; 
     double sl_pips;
     double tp_pips;
 } StrategyParams;
@@ -46,7 +49,7 @@ int fetch_historical_data(const char* symbol, const char* interval, Candle* out_
 void parse_live_tick(const char* json_string, LiveTick* out_tick);
 
 // Strategy & Execution Functions
-int strategy_bollinger_bands(Candle* prices, int current_idx, StrategyParams* params);
+int strategy_trend_pullback(Candle* prices, int current_idx, StrategyParams* params);
 double calculate_lot_size(Account* acc, double entry, double stop_loss);
 void execute_realistic_backtest_trade(Account* acc, Trade* trade, Candle* future_prices, int start_idx);
 void export_report(Trade* trades, int count, const char* filename);

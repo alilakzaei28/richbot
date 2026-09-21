@@ -19,18 +19,18 @@ int main(int argc, char *argv[]) {
     }
 
     if (strcmp(argv[1], "--backtest") == 0) {
-        printf("[INFO] Initializing backtest engine...\n");
+        printf("[INFO] Initializing High-Probability Backtest Engine...\n");
 
-        Candle raw_history[1000];
+        Candle raw_history[2000]; // Increased buffer for deeper EMA lookbacks
         memset(raw_history, 0, sizeof(raw_history));
 
-        int count = fetch_historical_data("EUR/USD", "1h", raw_history, 1000);
-        if (count < 60) {
-            printf("[ERROR] Insufficient data fetched (%d candles). Exiting.\n", count);
+        // Fetching max allowable free tier data
+        int count = fetch_historical_data("EUR/USD", "1h", raw_history, 2000);
+        if (count < 250) {
+            printf("[ERROR] Insufficient data. Trend strategy needs at least 250 candles.\n");
             return 1;
         }
 
-        // Twelve Data returns newest to oldest. Reverse to process chronologically.
         reverse_candles(raw_history, count);
         printf("[INFO] Chronologically aligned %d candles.\n", count);
 
@@ -38,24 +38,26 @@ int main(int argc, char *argv[]) {
         Account acc = {
             .initial_balance = 10000.0,
             .current_balance = 10000.0,
-            .max_risk_pct = 0.02,     // 2% per trade when use_fixed_lot = 0
-            .use_fixed_lot = 1,       // 1 = Fixed Lot, 0 = Dynamic Risk
-            .fixed_lot_size = 0.10    // 0.10 lots
+            .max_risk_pct = 0.02,     
+            .use_fixed_lot = 1,       
+            .fixed_lot_size = 0.50    // Sized up to half a lot
         };
 
         StrategyParams params = {
-            .bb_period = 20,
-            .bb_std_dev = 2.0,
-            .sl_pips = 25.0,
-            .tp_pips = 50.0
+            .trend_ema_period = 200,  // The institutional benchmark for trend direction
+            .rsi_period = 14,         // Standard RSI period
+            .rsi_oversold = 40.0,     // Look for shallow dips in uptrends
+            .rsi_overbought = 60.0,   // Look for shallow rallies in downtrends
+            .sl_pips = 30.0,          // 30 pip stop loss
+            .tp_pips = 45.0           // 45 pip take profit (1:1.5 R:R)
         };
         // -----------------------------------------------------
 
-        Trade trade_log[1000];
+        Trade trade_log[2000];
         int trade_count = 0;
 
-        for (int i = params.bb_period; i < count - 1; i++) {
-            int signal = strategy_bollinger_bands(raw_history, i, &params);
+        for (int i = params.trend_ema_period; i < count - 1; i++) {
+            int signal = strategy_trend_pullback(raw_history, i, &params);
             if (signal == 0) continue;
 
             Trade t;
@@ -67,10 +69,10 @@ int main(int argc, char *argv[]) {
             double sl_dist = params.sl_pips / 10000.0;
             double tp_dist = params.tp_pips / 10000.0;
 
-            if (signal == 1) { // BUY
+            if (signal == 1) { 
                 t.stop_loss = t.entry_price - sl_dist;
                 t.take_profit = t.entry_price + tp_dist;
-            } else { // SELL
+            } else { 
                 t.stop_loss = t.entry_price + sl_dist;
                 t.take_profit = t.entry_price - tp_dist;
             }
@@ -82,10 +84,12 @@ int main(int argc, char *argv[]) {
 
             if (t.realized_pnl != 0.0) {
                 trade_log[trade_count++] = t;
+                // Move the index forward to prevent the bot from opening 5 trades in a row during the same pullback
+                i += 5; 
             }
         }
 
-        export_report(trade_log, trade_count, "reports/backtest_results.csv");
+        export_report(trade_log, trade_count, "reports/backtest_EMA_RSI.csv");
 
         double total_pnl = acc.current_balance - acc.initial_balance;
         int wins = 0;
