@@ -36,28 +36,31 @@ typedef struct {
     double fixed_lot_size;   
 } Account;
 
-// Strategy Parameters
+// Upgraded Strategy Parameters
 typedef struct {
-    int lookback_period;       // 50 periods for Support/Resistance
-    int atr_period;            // 14 periods for Stop Loss buffer
-    int max_pullback_candles;  // 10 candles wait window
-    double risk_reward_ratio;  // 2.0 (1:2 R:R)
+    int lookback_period;       
+    int atr_period;            
+    int max_pullback_candles;  // Changed to 6
+    double risk_reward_ratio;  
+    int ema_period;            // 200 EMA Filter
+    int session_start_hour;    // 12 (12:00 PM GMT)
+    int session_end_hour;      // 17 (17:00 PM GMT)
+    double spread_slippage_pips; // Fixed cost deduction (e.g. 1.5)
 } StrategyParams;
 
-// Strategy State Tracker (to remember breakouts across loop iterations)
 typedef struct {
-    int active_breakout;       // 1 (Long Breakout), -1 (Short Breakout), 0 (None)
-    double broken_level;       // The exact Resistance or Support broken
+    int active_breakout;       
+    double broken_level;       
     int candles_since_breakout; 
 } StrategyState;
 
 // Core Functions
-int fetch_historical_data(const char* symbol, const char* interval, Candle* out_buffer, int max_candles);
+int fetch_historical_data(const char* symbol, const char* interval, Candle* out_buffer, int target_candles);
 void parse_live_tick(const char* json_string, LiveTick* out_tick);
 
 int strategy_breakout_pullback(Candle* prices, int current_idx, StrategyParams* params, StrategyState* state, double* out_sl);
 double calculate_lot_size(Account* acc, double entry, double stop_loss);
-int execute_realistic_backtest_trade(Account* acc, Trade* trade, Candle* prices, int start_idx);
+int execute_realistic_backtest_trade(Account* acc, Trade* trade, Candle* prices, int start_idx, StrategyParams* params);
 void export_report(Trade* trades, int count, const char* filename);
 
 #endif

@@ -4,6 +4,9 @@
 #include <math.h>
 #include "bot.h"
 
+// Array sizes increased to handle massive pagination
+#define DATA_SIZE 15000 
+
 static void reverse_candles(Candle* arr, int count) {
     for (int i = 0; i < count / 2; i++) {
         Candle temp = arr[i];
@@ -19,44 +22,53 @@ int main(int argc, char *argv[]) {
     }
 
     if (strcmp(argv[1], "--backtest") == 0) {
-        printf("[INFO] Initializing 15-Minute Breakout & Pullback Engine...\n");
+        printf("[INFO] Initializing Optimized 15-Minute Breakout Engine...\n");
 
-        Candle raw_history[2500]; 
-        memset(raw_history, 0, sizeof(raw_history));
+        Candle* raw_history = malloc(DATA_SIZE * sizeof(Candle));
+        if (!raw_history) {
+            printf("[ERROR] Memory allocation failed.\n");
+            return 1;
+        }
+        memset(raw_history, 0, DATA_SIZE * sizeof(Candle));
 
-        // Request 15-minute data
-        int count = fetch_historical_data("EUR/USD", "15min", raw_history, 2500);
-        if (count < 100) {
-            printf("[ERROR] Insufficient data for 50-period strategy.\n");
+        // Fetch up to 15,000 candles with chunked requests or load from local CSV
+        int count = fetch_historical_data("EUR/USD", "15min", raw_history, DATA_SIZE);
+        if (count < 500) {
+            printf("[ERROR] Insufficient data. Fetched: %d\n", count);
+            free(raw_history);
             return 1;
         }
 
         reverse_candles(raw_history, count);
-        printf("[INFO] Chronologically aligned %d candles (15m timeframe).\n", count);
+        printf("[INFO] Chronologically aligned %d candles.\n", count);
 
-        // --- ACCOUNT & STRATEGY SPECIFICATIONS ---
+        // --- OPTIMIZED ACCOUNT & STRATEGY SPECIFICATIONS ---
         Account acc = {
             .initial_balance = 10000.0,
             .current_balance = 10000.0,
             .max_risk_pct = 0.01,     // Exactly 1% risk per trade
-            .use_fixed_lot = 0,       // Disable fixed lot to enable dynamic position sizing
+            .use_fixed_lot = 0,       
             .fixed_lot_size = 0.0     
         };
 
         StrategyParams params = {
             .lookback_period = 50,    
             .atr_period = 14,         
-            .max_pullback_candles = 10, 
-            .risk_reward_ratio = 2.0  // Fixed 1:2 R:R
+            .max_pullback_candles = 6,     // Optimized: Tightened from 10 to 6
+            .risk_reward_ratio = 2.0,      // Fixed 1:2 R:R
+            .ema_period = 200,             // Optimized: 200 Macro Trend Filter
+            .session_start_hour = 12,      // Optimized: London/NY Overlap Only
+            .session_end_hour = 17,
+            .spread_slippage_pips = 1.5    // Optimized: Realistic execution cost
         };
         
         StrategyState state = {0, 0.0, 0};
-        // -----------------------------------------
+        // -----------------------------------------------------
 
-        Trade trade_log[1000];
+        Trade trade_log[5000];
         int trade_count = 0;
 
-        for (int i = params.lookback_period; i < count - 1; i++) {
+        for (int i = params.ema_period; i < count - 1; i++) {
             double calculated_sl = 0.0;
             int signal = strategy_breakout_pullback(raw_history, i, &params, &state, &calculated_sl);
             
@@ -70,7 +82,6 @@ int main(int argc, char *argv[]) {
             t.entry_price = raw_history[i].close;
             t.stop_loss = calculated_sl;
 
-            // Mathematical 1:2 Risk to Reward Calculation
             double risk_distance = fabs(t.entry_price - t.stop_loss);
             if (signal == 1) {
                 t.take_profit = t.entry_price + (risk_distance * params.risk_reward_ratio);
@@ -78,27 +89,21 @@ int main(int argc, char *argv[]) {
                 t.take_profit = t.entry_price - (risk_distance * params.risk_reward_ratio);
             }
 
-            // Position Sizing: Exactly 1% of account equity
             t.lot_size = calculate_lot_size(&acc, t.entry_price, t.stop_loss);
             if (t.lot_size < 0.01) continue;
 
-            // Simulates trade and returns the index where the trade hit SL or TP
-            int close_idx = execute_realistic_backtest_trade(&acc, &t, raw_history, i);
+            // Execution subtracts the spread penalty automatically
+            int close_idx = execute_realistic_backtest_trade(&acc, &t, raw_history, i, &params);
 
             if (t.realized_pnl != 0.0) {
                 trade_log[trade_count++] = t;
-                
-                // Pyramiding strict rule: 1 order at a time.
-                // Advance the loop directly to the candle where the trade closed.
                 i = close_idx; 
-                
-                // Clear any residual strategy state to start scanning fresh
                 state.active_breakout = 0; 
                 state.candles_since_breakout = 0;
             }
         }
 
-        export_report(trade_log, trade_count, "reports/backtest_15m_Breakout.csv");
+        export_report(trade_log, trade_count, "reports/backtest_15m_Opt_Breakout.csv");
 
         double total_pnl = acc.current_balance - acc.initial_balance;
         int wins = 0;
@@ -108,14 +113,16 @@ int main(int argc, char *argv[]) {
         double win_rate = (trade_count > 0) ? ((double)wins / trade_count) * 100.0 : 0.0;
 
         printf("\n==========================================\n");
-        printf("     15-MIN BREAKOUT & PULLBACK SUMMARY   \n");
+        printf("     OPTIMIZED 15-MIN BREAKOUT SUMMARY    \n");
         printf("==========================================\n");
         printf("Initial Balance : $%.2f\n", acc.initial_balance);
         printf("Final Balance   : $%.2f\n", acc.current_balance);
-        printf("Net Profit/Loss : $%.2f\n", total_pnl);
+        printf("Net Profit/Loss : $%.2f (Inc. Spread)\n", total_pnl);
         printf("Total Trades    : %d\n", trade_count);
         printf("Win Rate        : %.2f%%\n", win_rate);
         printf("==========================================\n");
+        
+        free(raw_history);
     } 
 
     return 0;
