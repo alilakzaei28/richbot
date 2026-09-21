@@ -26,6 +26,7 @@ typedef struct {
     double realized_pnl;
     char entry_time[32];
     char exit_time[32];
+    double exit_price; // Added to capture exact exit coordinate
 } Trade;
 
 typedef struct {
@@ -36,11 +37,10 @@ typedef struct {
     double fixed_lot_size;   
 } Account;
 
-// Upgraded Fakeout Strategy Parameters
 typedef struct {
     int lookback_period;       
     int atr_period;
-    double atr_multiplier;     // Replaces the hardcoded 1.5           
+    double atr_multiplier;     
     double risk_reward_ratio;  
     int session_start_hour;    
     int session_end_hour;      
@@ -53,7 +53,6 @@ typedef struct {
     int candles_since_breakout; 
 } StrategyState;
 
-// Grid Search Result Container
 typedef struct {
     int lookback;
     double atr_mult;
@@ -64,13 +63,10 @@ typedef struct {
     double max_drawdown;
 } SimulationResult;
 
-// Core Functions
 int fetch_historical_data(const char* symbol, const char* interval, Candle* out_buffer, int target_candles);
 void parse_live_tick(const char* json_string, LiveTick* out_tick);
-
 int strategy_fakeout_reversal(Candle* prices, int current_idx, StrategyParams* params, StrategyState* state, double* out_sl);
 double calculate_lot_size(Account* acc, double entry, double stop_loss);
 int execute_realistic_backtest_trade(Account* acc, Trade* trade, Candle* prices, int start_idx, StrategyParams* params);
-void export_report(Trade* trades, int count, const char* filename);
 
 #endif

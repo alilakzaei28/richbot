@@ -2,7 +2,8 @@ CC = gcc
 CFLAGS = -Wall -O3 -fopenmp -I./include
 LDFLAGS = -lcurl -lm -fopenmp
 
-SRC = src/main.c src/twelvedata.c src/strategy.c src/risk.c src/cJSON.c
+# Included src/csv_exporter.c
+SRC = src/main.c src/twelvedata.c src/strategy.c src/risk.c src/csv_exporter.c src/cJSON.c
 OBJ = $(SRC:.c=.o)
 TARGET = twelvedata_bot
 

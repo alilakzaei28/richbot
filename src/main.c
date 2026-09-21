@@ -4,6 +4,7 @@
 #include <math.h>
 #include <omp.h>
 #include "bot.h"
+#include "csv_exporter.h"
 
 #define DATA_SIZE 15000 
 
@@ -15,7 +16,6 @@ static void reverse_candles(Candle* arr, int count) {
     }
 }
 
-// QSort Comparator for descending Net PnL
 int compare_results(const void *a, const void *b) {
     SimulationResult *resA = (SimulationResult *)a;
     SimulationResult *resB = (SimulationResult *)b;
@@ -24,8 +24,8 @@ int compare_results(const void *a, const void *b) {
     return 0;
 }
 
-// Standalone isolated backtest engine for OpenMP workers
-SimulationResult run_backtest(int lookback, double atr_mult, double rr_ratio, Candle* data, int data_size) {
+// Added out_trades and out_trade_count pointers for the final verification pass
+SimulationResult run_backtest(int lookback, double atr_mult, double rr_ratio, Candle* data, int data_size, Trade* out_trades, int* out_trade_count) {
     Account acc = {
         .initial_balance = 10000.0,
         .current_balance = 10000.0,
@@ -60,6 +60,8 @@ SimulationResult run_backtest(int lookback, double atr_mult, double rr_ratio, Ca
         Trade t;
         memset(&t, 0, sizeof(Trade));
         t.type = signal;
+        strncpy(t.symbol, "EUR/USD", sizeof(t.symbol) - 1);
+        strcpy(t.entry_time, data[i].timestamp);
         t.entry_price = data[i+1].open; 
         t.stop_loss = calculated_sl;
 
@@ -76,10 +78,16 @@ SimulationResult run_backtest(int lookback, double atr_mult, double rr_ratio, Ca
         int close_idx = execute_realistic_backtest_trade(&acc, &t, data, i + 1, &params);
 
         if (t.realized_pnl != 0.0) {
+            
+            // Only save trade data to memory if pointers were provided
+            if (out_trades != NULL && out_trade_count != NULL) {
+                out_trades[*out_trade_count] = t;
+            }
+
             total_trades++;
+            if (out_trade_count != NULL) (*out_trade_count)++;
             if (t.realized_pnl > 0) wins++;
             
-            // Track Drawdown
             if (acc.current_balance > peak_balance) {
                 peak_balance = acc.current_balance;
             }
@@ -118,9 +126,7 @@ int main(int argc, char *argv[]) {
         return 1;
     }
     reverse_candles(raw_history, count);
-    printf("[INFO] Data loaded. Commencing parallel execution across CPU threads...\n\n");
 
-    // Grid Dimensions
     int num_lookback = 9;  // 20 to 100
     int num_atr = 11;      // 1.0 to 3.0
     int num_rr = 5;        // 1.0 to 3.0
@@ -128,21 +134,20 @@ int main(int argc, char *argv[]) {
 
     SimulationResult* results = malloc(total_permutations * sizeof(SimulationResult));
 
+    printf("[INFO] Grid Search Started. Sweeping %d permutations...\n", total_permutations);
     double start_time = omp_get_wtime();
 
-    // Multithreaded Matrix Execution
     #pragma omp parallel for collapse(3) schedule(dynamic)
     for (int l = 0; l < num_lookback; l++) {
         for (int a = 0; a < num_atr; a++) {
             for (int r = 0; r < num_rr; r++) {
-                
                 int current_lookback = 20 + (l * 10);
                 double current_atr = 1.0 + (a * 0.2);
                 double current_rr = 1.0 + (r * 0.5);
 
-                SimulationResult res = run_backtest(current_lookback, current_atr, current_rr, raw_history, count);
+                // Pass NULL for the array during the fast parallel search to save memory
+                SimulationResult res = run_backtest(current_lookback, current_atr, current_rr, raw_history, count, NULL, NULL);
                 
-                // Deterministic flat-array indexing avoids mutex locking
                 int flat_idx = l * (num_atr * num_rr) + a * num_rr + r;
                 results[flat_idx] = res;
             }
@@ -150,30 +155,27 @@ int main(int argc, char *argv[]) {
     }
 
     double end_time = omp_get_wtime();
-    printf("[INFO] Matrix calculated %d permutations in %.2f seconds.\n\n", total_permutations, end_time - start_time);
+    printf("[INFO] Matrix completed in %.2f seconds.\n\n", end_time - start_time);
 
-    // Sort and Print Top 10
     qsort(results, total_permutations, sizeof(SimulationResult), compare_results);
 
     printf("===============================================================================\n");
-    printf(" TOP 10 OPTIMIZED PARAMETER SETS (By Net PnL)\n");
+    printf(" TOP 1 OPTIMIZED PARAMETER SET\n");
     printf("===============================================================================\n");
-    printf("Rank | Lookback | ATR Mult | R:R Ratio | Win Rate | Trades | Max DD | Net PnL\n");
-    printf("-------------------------------------------------------------------------------\n");
-    
-    for (int i = 0; i < 10 && i < total_permutations; i++) {
-        printf("#%-3d | %-8d | %-8.1f | %-9.1f | %-7.2f%% | %-6d | %-5.2f%% | $%-.2f\n",
-               i + 1,
-               results[i].lookback,
-               results[i].atr_mult,
-               results[i].rr_ratio,
-               results[i].win_rate,
-               results[i].total_trades,
-               results[i].max_drawdown,
-               results[i].net_pnl);
-    }
-    printf("===============================================================================\n");
+    printf("Lookback: %d | ATR Mult: %.1f | R:R Ratio: %.1f | Win Rate: %.2f%% | Net PnL: $%.2f\n",
+            results[0].lookback, results[0].atr_mult, results[0].rr_ratio, results[0].win_rate, results[0].net_pnl);
+    printf("===============================================================================\n\n");
 
+    // FINAL VERIFICATION RUN
+    printf("[INFO] Running final verification sequence with optimal parameters...\n");
+    Trade* verification_trades = malloc(5000 * sizeof(Trade));
+    int verification_count = 0;
+
+    run_backtest(results[0].lookback, results[0].atr_mult, results[0].rr_ratio, raw_history, count, verification_trades, &verification_count);
+    
+    export_trades_to_csv("reports/best_strategy_trades.csv", verification_trades, verification_count);
+
+    free(verification_trades);
     free(results);
     free(raw_history);
     return 0;
