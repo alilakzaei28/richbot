@@ -31,7 +31,7 @@ jobs:
 
       - name: Compile Application
         run: |
-          gcc -Wall -O3 -fopenmp -I./include src/main.c src/twelvedata.c src/strategy.c src/risk.c src/cJSON.c -o twelvedata_bot -lcurl -lm
+          gcc -Wall -O3 -fopenmp -I./include src/main.c src/twelvedata.c src/strategy.c src/risk.c src/csv_exporter.c src/cJSON.c -o twelvedata_bot -lcurl -lm
 
       - name: Execute Backtest
         env:

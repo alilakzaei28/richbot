@@ -45,7 +45,11 @@ int fetch_historical_data(const char* symbol, const char* interval, Candle* out_
         printf("[INFO] Found local cache: %s. Loading data...\n", cache_filename);
         char line[256];
         int count = 0;
-        fgets(line, sizeof(line), cache_file); 
+        
+        if (fgets(line, sizeof(line), cache_file) == NULL) {
+            printf("[WARN] Cache file is empty or missing headers.\n");
+        }
+        
         while (fgets(line, sizeof(line), cache_file) && count < target_candles) {
             sscanf(line, "%[^,],%lf,%lf,%lf,%lf,%lf", 
                    out_buffer[count].timestamp, &out_buffer[count].open, 
