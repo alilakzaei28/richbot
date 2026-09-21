@@ -1,0 +1,17 @@
+# Compiled binaries and object files
+*.o
+*.obj
+*.exe
+twelvedata_bot
+
+# Build and IDE artifacts
+.vscode/
+.idea/
+
+# Dynamic output reports
+reports/*.csv
+!reports/.gitkeep
+
+# System files
+Thumbs.db
+.DS_Store
