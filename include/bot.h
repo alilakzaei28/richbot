@@ -36,10 +36,11 @@ typedef struct {
     double fixed_lot_size;   
 } Account;
 
-// Fakeout Strategy Parameters
+// Upgraded Fakeout Strategy Parameters
 typedef struct {
     int lookback_period;       
-    int atr_period;            
+    int atr_period;
+    double atr_multiplier;     // Replaces the hardcoded 1.5           
     double risk_reward_ratio;  
     int session_start_hour;    
     int session_end_hour;      
@@ -51,6 +52,17 @@ typedef struct {
     double broken_level;       
     int candles_since_breakout; 
 } StrategyState;
+
+// Grid Search Result Container
+typedef struct {
+    int lookback;
+    double atr_mult;
+    double rr_ratio;
+    double net_pnl;
+    double win_rate;
+    int total_trades;
+    double max_drawdown;
+} SimulationResult;
 
 // Core Functions
 int fetch_historical_data(const char* symbol, const char* interval, Candle* out_buffer, int target_candles);

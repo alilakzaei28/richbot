@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include <omp.h>
 #include "bot.h"
 
 #define DATA_SIZE 15000 
@@ -14,112 +15,166 @@ static void reverse_candles(Candle* arr, int count) {
     }
 }
 
-int main(int argc, char *argv[]) {
-    if (argc < 2) {
-        printf("Usage: %s [--backtest | --live]\n", argv[0]);
-        return 1;
+// QSort Comparator for descending Net PnL
+int compare_results(const void *a, const void *b) {
+    SimulationResult *resA = (SimulationResult *)a;
+    SimulationResult *resB = (SimulationResult *)b;
+    if (resB->net_pnl > resA->net_pnl) return 1;
+    if (resB->net_pnl < resA->net_pnl) return -1;
+    return 0;
+}
+
+// Standalone isolated backtest engine for OpenMP workers
+SimulationResult run_backtest(int lookback, double atr_mult, double rr_ratio, Candle* data, int data_size) {
+    Account acc = {
+        .initial_balance = 10000.0,
+        .current_balance = 10000.0,
+        .max_risk_pct = 0.01,
+        .use_fixed_lot = 0,
+        .fixed_lot_size = 0.0
+    };
+
+    StrategyParams params = {
+        .lookback_period = lookback,    
+        .atr_period = 14,         
+        .atr_multiplier = atr_mult,
+        .risk_reward_ratio = rr_ratio,
+        .session_start_hour = 8,
+        .session_end_hour = 17,
+        .spread_slippage_pips = 1.5
+    };
+    
+    StrategyState state = {0, 0.0, 0};
+    
+    int wins = 0;
+    int total_trades = 0;
+    double peak_balance = acc.initial_balance;
+    double max_drawdown = 0.0;
+
+    for (int i = params.lookback_period; i < data_size - 1; i++) {
+        double calculated_sl = 0.0;
+        int signal = strategy_fakeout_reversal(data, i, &params, &state, &calculated_sl);
+        
+        if (signal == 0) continue;
+
+        Trade t;
+        memset(&t, 0, sizeof(Trade));
+        t.type = signal;
+        t.entry_price = data[i+1].open; 
+        t.stop_loss = calculated_sl;
+
+        double risk_distance = fabs(t.entry_price - t.stop_loss);
+        if (signal == 1) {
+            t.take_profit = t.entry_price + (risk_distance * params.risk_reward_ratio);
+        } else {
+            t.take_profit = t.entry_price - (risk_distance * params.risk_reward_ratio);
+        }
+
+        t.lot_size = calculate_lot_size(&acc, t.entry_price, t.stop_loss);
+        if (t.lot_size < 0.01) continue;
+
+        int close_idx = execute_realistic_backtest_trade(&acc, &t, data, i + 1, &params);
+
+        if (t.realized_pnl != 0.0) {
+            total_trades++;
+            if (t.realized_pnl > 0) wins++;
+            
+            // Track Drawdown
+            if (acc.current_balance > peak_balance) {
+                peak_balance = acc.current_balance;
+            }
+            double current_drawdown = ((peak_balance - acc.current_balance) / peak_balance) * 100.0;
+            if (current_drawdown > max_drawdown) {
+                max_drawdown = current_drawdown;
+            }
+
+            i = close_idx; 
+        }
     }
 
-    if (strcmp(argv[1], "--backtest") == 0) {
-        printf("[INFO] Initializing 15-Minute Fakeout & Reversal Engine...\n");
+    SimulationResult res;
+    res.lookback = lookback;
+    res.atr_mult = atr_mult;
+    res.rr_ratio = rr_ratio;
+    res.net_pnl = acc.current_balance - acc.initial_balance;
+    res.win_rate = (total_trades > 0) ? ((double)wins / total_trades) * 100.0 : 0.0;
+    res.total_trades = total_trades;
+    res.max_drawdown = max_drawdown;
 
-        Candle* raw_history = malloc(DATA_SIZE * sizeof(Candle));
-        if (!raw_history) {
-            printf("[ERROR] Memory allocation failed.\n");
-            return 1;
-        }
-        memset(raw_history, 0, DATA_SIZE * sizeof(Candle));
+    return res;
+}
 
-        int count = fetch_historical_data("EUR/USD", "15min", raw_history, DATA_SIZE);
-        if (count < 500) {
-            printf("[ERROR] Insufficient data. Fetched: %d\n", count);
-            free(raw_history);
-            return 1;
-        }
+int main(int argc, char *argv[]) {
+    printf("[INFO] Initializing OpenMP Grid Search Optimizer...\n");
 
-        reverse_candles(raw_history, count);
-        printf("[INFO] Chronologically aligned %d candles.\n", count);
+    Candle* raw_history = malloc(DATA_SIZE * sizeof(Candle));
+    if (!raw_history) return 1;
+    memset(raw_history, 0, DATA_SIZE * sizeof(Candle));
 
-        // --- ACCOUNT & FAKEOUT STRATEGY SPECIFICATIONS ---
-        Account acc = {
-            .initial_balance = 10000.0,
-            .current_balance = 10000.0,
-            .max_risk_pct = 0.01,     // 1% Risk per trade
-            .use_fixed_lot = 0,       
-            .fixed_lot_size = 0.0     
-        };
-
-        StrategyParams params = {
-            .lookback_period = 50,    
-            .atr_period = 14,         
-            .risk_reward_ratio = 2.0,      // Fixed 1:2 R:R
-            .session_start_hour = 8,       // 08:00 AM GMT
-            .session_end_hour = 17,        // 17:00 PM GMT
-            .spread_slippage_pips = 1.5    // Execution spread penalty
-        };
-        
-        StrategyState state = {0, 0.0, 0};
-        // -------------------------------------------------
-
-        Trade trade_log[5000];
-        int trade_count = 0;
-
-        for (int i = params.lookback_period; i < count - 1; i++) {
-            double calculated_sl = 0.0;
-            
-            int signal = strategy_fakeout_reversal(raw_history, i, &params, &state, &calculated_sl);
-            
-            if (signal == 0) continue;
-
-            Trade t;
-            memset(&t, 0, sizeof(Trade));
-            strncpy(t.symbol, "EUR/USD", sizeof(t.symbol) - 1);
-            strcpy(t.entry_time, raw_history[i].timestamp);
-            t.type = signal;
-            
-            // Entry is exactly at the Open of the subsequent candle
-            t.entry_price = raw_history[i+1].open; 
-            t.stop_loss = calculated_sl;
-
-            double risk_distance = fabs(t.entry_price - t.stop_loss);
-            if (signal == 1) {
-                t.take_profit = t.entry_price + (risk_distance * params.risk_reward_ratio);
-            } else {
-                t.take_profit = t.entry_price - (risk_distance * params.risk_reward_ratio);
-            }
-
-            t.lot_size = calculate_lot_size(&acc, t.entry_price, t.stop_loss);
-            if (t.lot_size < 0.01) continue;
-
-            int close_idx = execute_realistic_backtest_trade(&acc, &t, raw_history, i + 1, &params);
-
-            if (t.realized_pnl != 0.0) {
-                trade_log[trade_count++] = t;
-                i = close_idx; 
-            }
-        }
-
-        export_report(trade_log, trade_count, "reports/backtest_15m_Fakeout.csv");
-
-        double total_pnl = acc.current_balance - acc.initial_balance;
-        int wins = 0;
-        for (int i = 0; i < trade_count; i++) {
-            if (trade_log[i].realized_pnl > 0) wins++;
-        }
-        double win_rate = (trade_count > 0) ? ((double)wins / trade_count) * 100.0 : 0.0;
-
-        printf("\n==========================================\n");
-        printf("       FAKEOUT STRATEGY SUMMARY           \n");
-        printf("==========================================\n");
-        printf("Initial Balance : $%.2f\n", acc.initial_balance);
-        printf("Final Balance   : $%.2f\n", acc.current_balance);
-        printf("Net Profit/Loss : $%.2f (Inc. Spread)\n", total_pnl);
-        printf("Total Trades    : %d\n", trade_count);
-        printf("Win Rate        : %.2f%%\n", win_rate);
-        printf("==========================================\n");
-        
+    int count = fetch_historical_data("EUR/USD", "15min", raw_history, DATA_SIZE);
+    if (count < 500) {
+        printf("[ERROR] Insufficient data.\n");
         free(raw_history);
-    } 
+        return 1;
+    }
+    reverse_candles(raw_history, count);
+    printf("[INFO] Data loaded. Commencing parallel execution across CPU threads...\n\n");
 
+    // Grid Dimensions
+    int num_lookback = 9;  // 20 to 100
+    int num_atr = 11;      // 1.0 to 3.0
+    int num_rr = 5;        // 1.0 to 3.0
+    int total_permutations = num_lookback * num_atr * num_rr;
+
+    SimulationResult* results = malloc(total_permutations * sizeof(SimulationResult));
+
+    double start_time = omp_get_wtime();
+
+    // Multithreaded Matrix Execution
+    #pragma omp parallel for collapse(3) schedule(dynamic)
+    for (int l = 0; l < num_lookback; l++) {
+        for (int a = 0; a < num_atr; a++) {
+            for (int r = 0; r < num_rr; r++) {
+                
+                int current_lookback = 20 + (l * 10);
+                double current_atr = 1.0 + (a * 0.2);
+                double current_rr = 1.0 + (r * 0.5);
+
+                SimulationResult res = run_backtest(current_lookback, current_atr, current_rr, raw_history, count);
+                
+                // Deterministic flat-array indexing avoids mutex locking
+                int flat_idx = l * (num_atr * num_rr) + a * num_rr + r;
+                results[flat_idx] = res;
+            }
+        }
+    }
+
+    double end_time = omp_get_wtime();
+    printf("[INFO] Matrix calculated %d permutations in %.2f seconds.\n\n", total_permutations, end_time - start_time);
+
+    // Sort and Print Top 10
+    qsort(results, total_permutations, sizeof(SimulationResult), compare_results);
+
+    printf("===============================================================================\n");
+    printf(" TOP 10 OPTIMIZED PARAMETER SETS (By Net PnL)\n");
+    printf("===============================================================================\n");
+    printf("Rank | Lookback | ATR Mult | R:R Ratio | Win Rate | Trades | Max DD | Net PnL\n");
+    printf("-------------------------------------------------------------------------------\n");
+    
+    for (int i = 0; i < 10 && i < total_permutations; i++) {
+        printf("#%-3d | %-8d | %-8.1f | %-9.1f | %-7.2f%% | %-6d | %-5.2f%% | $%-.2f\n",
+               i + 1,
+               results[i].lookback,
+               results[i].atr_mult,
+               results[i].rr_ratio,
+               results[i].win_rate,
+               results[i].total_trades,
+               results[i].max_drawdown,
+               results[i].net_pnl);
+    }
+    printf("===============================================================================\n");
+
+    free(results);
+    free(raw_history);
     return 0;
 }

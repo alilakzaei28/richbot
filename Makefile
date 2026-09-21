@@ -1,6 +1,6 @@
 CC = gcc
-CFLAGS = -Wall -Wextra -O3 -fopenmp -I./include
-LDFLAGS = -lcurl -lm
+CFLAGS = -Wall -O3 -fopenmp -I./include
+LDFLAGS = -lcurl -lm -fopenmp
 
 SRC = src/main.c src/twelvedata.c src/strategy.c src/risk.c src/cJSON.c
 OBJ = $(SRC:.c=.o)
