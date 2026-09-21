@@ -37,11 +37,11 @@ int main(int argc, char *argv[]) {
 
         // --- USER CONFIGURABLE CAPITAL & STRATEGY SETTINGS ---
         Account acc = {
-            .initial_balance = 10000.0,
-            .current_balance = 10000.0,
-            .max_risk_pct = 0.02,     
-            .use_fixed_lot = 1,       
-            .fixed_lot_size = 0.50    // Half a standard lot
+            .initial_balance = 100000.0,
+            .current_balance = 100000.0,
+            .max_risk_pct = 0.10,     
+            .use_fixed_lot = 2,       
+            .fixed_lot_size = 1    // Half a standard lot
         };
 
         StrategyParams params = {
